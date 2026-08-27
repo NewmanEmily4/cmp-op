@@ -1,0 +1,293 @@
+name: Build OpenWrt from Config URL
+
+on:
+  workflow_dispatch:
+    inputs:
+      ssh:
+        description: "SSH connection to Actions"
+        required: false
+        default: "false"
+      configURL:
+        description: "Config URL (first line must contain OpenWrt version)"
+        required: true
+      diskfree:
+        description: "show disk free space"
+        required: false
+        default: "false"
+      singlethread:
+        description: "use single thread to compile"
+        required: false
+        default: "false"
+
+env:
+  REPO_URL: https://github.com/openwrt/openwrt.git
+  FEEDS_CONF: feeds.conf.default
+  RAW_CONFIG_FILE: raw.config
+  CONFIG_FILE: .config
+  DIY_P1_SH: diy-part1.sh
+  DIY_P2_SH: diy-part2.sh
+  FUNCS_SH: funcs.sh
+  TZ: Asia/Shanghai
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialization environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
+          bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib \
+          git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev \
+          libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libreadline-dev libssl-dev libssh2-1-dev libtool lrzsz \
+          mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools \
+          libpython3-dev qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip \
+          vim wget xmlto xxd zlib1g-dev python3-setuptools
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/local/lib/android /opt/ghc /usr/share/dotnet /usr/local/graalvm /usr/local/.ghcup \
+          /usr/local/share/powershell /usr/local/share/chromium /usr/local/lib/node_modules
+          sudo timedatectl set-timezone "$TZ"
+          sudo chown $USER:$GROUPS $GITHUB_WORKSPACE
+
+      - name: Download and parse config
+        run: |
+          set -e
+          wget "${{ github.event.inputs.configURL }}" -O "$RAW_CONFIG_FILE"
+
+          first_line="$(head -n 1 "$RAW_CONFIG_FILE" | tr -d '\r')"
+          if [ -z "$first_line" ]; then
+            echo "ERROR: 配置文件第一行为空，无法解析 OpenWrt 版本号" >&2
+            exit 1
+          fi
+
+          parsed_ver="$(echo "$first_line" | grep -Eo '[0-9]+\.[0-9]+(\.[0-9]+)?|SNAPSHOT|snapshot|master|main' | head -n 1)"
+          if [ -z "$parsed_ver" ]; then
+            echo "ERROR: 第一行版本号格式无效: $first_line" >&2
+            echo "支持示例: '# DESTVER=23.05.5'、'OpenWrt: 24.10.0'、'23.05.5'" >&2
+            exit 1
+          fi
+
+          tail -n +2 "$RAW_CONFIG_FILE" > "$CONFIG_FILE"
+          if [ ! -s "$CONFIG_FILE" ]; then
+            echo "ERROR: 配置文件除第一行版本号外没有任何配置内容" >&2
+            exit 1
+          fi
+
+          echo "DESTVER=$parsed_ver" >> "$GITHUB_ENV"
+
+      - name: Resolve source ref for compatibility
+        run: |
+          set -e
+          ver="${{ env.DESTVER }}"
+          selected_ref=""
+
+          if echo "$ver" | grep -Eq '^(SNAPSHOT|snapshot|master|main)$'; then
+            for ref in "refs/heads/master" "refs/heads/main"; do
+              if git ls-remote --exit-code "$REPO_URL" "$ref" >/dev/null 2>&1; then
+                selected_ref="${ref#refs/heads/}"
+                break
+              fi
+            done
+          else
+            major_minor="$(echo "$ver" | awk -F. '{print $1 "." $2}')"
+            for ref in \
+              "refs/tags/v$ver" \
+              "refs/heads/openwrt-$major_minor" \
+              "refs/heads/openwrt-$ver" \
+              "refs/tags/$ver"; do
+              if git ls-remote --exit-code "$REPO_URL" "$ref" >/dev/null 2>&1; then
+                selected_ref="${ref#refs/tags/}"
+                selected_ref="${selected_ref#refs/heads/}"
+                break
+              fi
+            done
+          fi
+
+          if [ -z "$selected_ref" ]; then
+            echo "ERROR: 无法在 $REPO_URL 找到与版本 $ver 对应的 tag/branch" >&2
+            exit 1
+          fi
+
+          echo "OPENWRT_REF=$selected_ref" >> "$GITHUB_ENV"
+          echo "Using OpenWrt ref: $selected_ref"
+
+      - name: Clone source code
+        run: |
+          set -e
+          git clone "$REPO_URL" -b "${{ env.OPENWRT_REF }}" openwrt
+
+      - name: Load custom feeds
+        run: |
+          [ -e "$FEEDS_CONF" ] && mv "$FEEDS_CONF" openwrt/feeds.conf.default
+          chmod +x "$DIY_P1_SH" "$FUNCS_SH"
+          cd openwrt
+          "$GITHUB_WORKSPACE/$DIY_P1_SH"
+
+      - name: Update feeds
+        run: cd openwrt && ./scripts/feeds update -a
+
+      - name: Install feeds
+        run: cd openwrt && ./scripts/feeds install -a
+
+      - name: Load custom configuration
+        run: |
+          [ -e files ] && mv files openwrt/files
+          cp "$CONFIG_FILE" openwrt/.config
+          chmod +x "$DIY_P2_SH"
+          cd openwrt
+          "$GITHUB_WORKSPACE/$DIY_P2_SH"
+
+      # - name: SSH connection to Actions
+      #   uses: P3TERX/ssh2actions@v1.0.0
+      #   if: (github.event.inputs.ssh == 'true' && github.event.inputs.ssh != 'false') || contains(github.event.action, 'ssh')
+      #   env:
+      #     TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      #     TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+
+      # - name: Setup Upterm Session (SSH Debug)
+      #   uses: lhotari/action-upterm@v1
+      #   if: (github.event.inputs.ssh == 'true' && github.event.inputs.ssh != 'false') || contains(github.event.action, 'ssh')
+      #   with:
+      #     # 限制只有触发此 Workflow 的人才能通过自己的 GitHub SSH Key 登录
+      #     limit-access-to-actor: false          
+
+      - name: Native Shell Ngrok Debug
+        if: (github.event.inputs.ssh == 'true' && github.event.inputs.ssh != 'false') || contains(github.event.action, 'ssh')
+        run: |
+          # 1. 配置虚拟机的 SSH 密码（用于你稍后本地登录）
+          echo "runner:${{ secrets.SSH_PASSWORD }}" | sudo chpasswd
+          sudo systemctl start ssh
+          
+          # 2. 使用官方推荐的 APT 方式安装最新版 Ngrok（无需手动解压，绝不报错）
+          curl -sSL https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
+          echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
+          sudo apt-get update && sudo apt-get install ngrok -y
+          
+          # 3. 绑定你自己的官方授权 Token
+          ngrok config add-authtoken "${{ secrets.NGROK_AUTHTOKEN }}"
+          
+          # 4. 后台启动 Ngrok 隧道，并将虚拟机的 22 端口暴露出去
+          ngrok tcp 22 --log=stdout > ngrok.log &
+          
+          # 5. 等待 5 秒让隧道建立，然后从日志中提取标准 SSH 连接命令
+          sleep 5
+          echo "=================================================="
+          echo "请复制下方命令并在你本地终端运行进行登录："
+          curl -s http://127.0.0 | grep -o 'tcp://[^"]*' | sed 's/tcp:\/\//ssh -p /' | sed 's/:/ runner@/'
+          echo "=================================================="
+          
+          # 【高级计费优化】：循环检测 ngrok 进程是否还在运行
+          # 只要你在本地终端输入 `exit` 退出登录，或者关闭本地终端，
+          # 虚拟机的临时 SSH 连接就会断开，此循环就会立刻结束，绝对不浪费 1 分钟额度！
+          while pgrep -x "sshd" > /dev/null; do
+            sleep 5
+          done
+          echo "检测到 SSH 客户端已断开，正在自动关闭虚拟机以节省 Actions 额度..."
+
+
+      - name: Download package
+        run: |
+          set -e
+          cd openwrt
+          make defconfig
+          make download -j8
+          find dl -size -1024c -exec rm -f {} \;
+
+      - name: Compile the firmware
+        id: compile
+        timeout-minutes: 360
+        run: |
+          set +e
+          cd openwrt
+
+          if ${{ github.event.inputs.diskfree == 'true' }}; then
+            "$GITHUB_WORKSPACE/$FUNCS_SH" df &
+          fi
+
+          if ${{ github.event.inputs.singlethread == 'true' }}; then
+            echo "single thread compile"
+            make -j1 V=s
+            status=$?
+          else
+            echo "$(nproc) threads compile"
+            make -j"$(nproc)"
+            status=$?
+            if [ "$status" -ne 0 ]; then
+              echo "multi-thread compile failed, retry single thread"
+              make -j1 V=s
+              status=$?
+            fi
+          fi
+
+          if [ "$status" -ne 0 ]; then
+            echo "Compile failed" >&2
+            exit 1
+          fi
+
+          echo "status=success" >> "$GITHUB_OUTPUT"
+          grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
+          [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> "$GITHUB_ENV"
+          echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> "$GITHUB_ENV"
+
+      - name: Upload bin directory
+        uses: actions/upload-artifact@v4
+        if: steps.compile.outputs.status == 'success'
+        with:
+          name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+          path: openwrt/bin
+
+      - name: Organize files
+        id: organize
+        if: ${{ !cancelled() }}
+        run: |
+          set -e
+          cd openwrt/bin/targets/*/*
+          rm -rf packages
+          cp "$GITHUB_WORKSPACE/openwrt/.config" "build-${{ env.DESTVER }}.config"
+          sed -i "1i # DESTVER=${{ env.DESTVER }}" "build-${{ env.DESTVER }}.config"
+          echo "FIRMWARE=$PWD" >> "$GITHUB_ENV"
+          echo "status=success" >> "$GITHUB_OUTPUT"
+
+      - name: Generate diffconfig
+        if: steps.organize.outputs.status == 'success' && !cancelled()
+        run: |
+          set -e
+          cd openwrt
+          make defconfig
+          if make savedefconfig 2>/dev/null && [ -f .config.savedefconfig ]; then
+            cp .config.savedefconfig "${{ env.FIRMWARE }}/build-${{ env.DESTVER }}.diffconfig"
+          else
+            ./scripts/config/conf --savedefconfig=defconfig Config.in
+            cp defconfig "${{ env.FIRMWARE }}/build-${{ env.DESTVER }}.diffconfig"
+          fi
+
+      - name: Upload firmware directory
+        uses: actions/upload-artifact@v4
+        if: steps.organize.outputs.status == 'success' && !cancelled()
+        with:
+          name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+          path: ${{ env.FIRMWARE }}
+
+      - name: Generate release tag
+        id: tag
+        if: steps.organize.outputs.status == 'success' && !cancelled()
+        run: |
+          echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload firmware to release
+        uses: softprops/action-gh-release@v1
+        if: steps.organize.outputs.status == 'success' && !cancelled()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.tag.outputs.release_tag }}
+          files: ${{ env.FIRMWARE }}/*
