@@ -6,14 +6,15 @@ on:
       ssh:
         description: "SSH connection to Actions"
         required: false
-        default: "false"
+        default: "true"
       configURL:
         description: "Config URL (first line must contain OpenWrt version)"
         required: true
+        default: "https://d7.tfdl.net/public/2026-08-24/dea3b56a-cbfc-4503-bf06-d581fe052852/x64.config"
       diskfree:
         description: "show disk free space"
         required: false
-        default: "false"
+        default: "true"
       singlethread:
         description: "use single thread to compile"
         required: false
