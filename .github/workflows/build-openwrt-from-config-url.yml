@@ -154,45 +154,45 @@ jobs:
       #     TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       #     TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
 
-      # - name: Setup Upterm Session (SSH Debug)
-      #   uses: lhotari/action-upterm@v1
-      #   if: (github.event.inputs.ssh == 'true' && github.event.inputs.ssh != 'false') || contains(github.event.action, 'ssh')
-      #   with:
-      #     # 限制只有触发此 Workflow 的人才能通过自己的 GitHub SSH Key 登录
-      #     limit-access-to-actor: false          
-
-      - name: Native Shell Ngrok Debug
+      - name: Setup Upterm Session (SSH Debug)
+        uses: lhotari/action-upterm@v1
         if: (github.event.inputs.ssh == 'true' && github.event.inputs.ssh != 'false') || contains(github.event.action, 'ssh')
-        run: |
-          # 1. 配置虚拟机的 SSH 密码（用于你稍后本地登录）
-          echo "runner:${{ secrets.SSH_PASSWORD }}" | sudo chpasswd
-          sudo systemctl start ssh
+        with:
+          # 限制只有触发此 Workflow 的人才能通过自己的 GitHub SSH Key 登录
+          limit-access-to-actor: false          
+
+      # - name: Native Shell Ngrok Debug
+      #   if: (github.event.inputs.ssh == 'true' && github.event.inputs.ssh != 'false') || contains(github.event.action, 'ssh')
+      #   run: |
+      #     # 1. 配置虚拟机的 SSH 密码（用于你稍后本地登录）
+      #     echo "runner:${{ secrets.SSH_PASSWORD }}" | sudo chpasswd
+      #     sudo systemctl start ssh
           
-          # 2. 使用官方推荐的 APT 方式安装最新版 Ngrok（无需手动解压，绝不报错）
-          curl -sSL https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
-          echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
-          sudo apt-get update && sudo apt-get install ngrok -y
+      #     # 2. 使用官方推荐的 APT 方式安装最新版 Ngrok（无需手动解压，绝不报错）
+      #     curl -sSL https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
+      #     echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
+      #     sudo apt-get update && sudo apt-get install ngrok -y
           
-          # 3. 绑定你自己的官方授权 Token
-          ngrok config add-authtoken "${{ secrets.NGROK_AUTHTOKEN }}"
+      #     # 3. 绑定你自己的官方授权 Token
+      #     ngrok config add-authtoken "${{ secrets.NGROK_AUTHTOKEN }}"
           
-          # 4. 后台启动 Ngrok 隧道，并将虚拟机的 22 端口暴露出去
-          ngrok tcp 22 --log=stdout > ngrok.log &
+      #     # 4. 后台启动 Ngrok 隧道，并将虚拟机的 22 端口暴露出去
+      #     ngrok tcp 22 --log=stdout > ngrok.log &
           
-          # 5. 等待 5 秒让隧道建立，然后从日志中提取标准 SSH 连接命令
-          sleep 5
-          echo "=================================================="
-          echo "请复制下方命令并在你本地终端运行进行登录："
-          curl -s http://127.0.0 | grep -o 'tcp://[^"]*' | sed 's/tcp:\/\//ssh -p /' | sed 's/:/ runner@/'
-          echo "=================================================="
+      #     # 5. 等待 5 秒让隧道建立，然后从日志中提取标准 SSH 连接命令
+      #     sleep 5
+      #     echo "=================================================="
+      #     echo "请复制下方命令并在你本地终端运行进行登录："
+      #     curl -s http://127.0.0 | grep -o 'tcp://[^"]*' | sed 's/tcp:\/\//ssh -p /' | sed 's/:/ runner@/'
+      #     echo "=================================================="
           
-          # 【高级计费优化】：循环检测 ngrok 进程是否还在运行
-          # 只要你在本地终端输入 `exit` 退出登录，或者关闭本地终端，
-          # 虚拟机的临时 SSH 连接就会断开，此循环就会立刻结束，绝对不浪费 1 分钟额度！
-          while pgrep -x "sshd" > /dev/null; do
-            sleep 5
-          done
-          echo "检测到 SSH 客户端已断开，正在自动关闭虚拟机以节省 Actions 额度..."
+      #     # 【高级计费优化】：循环检测 ngrok 进程是否还在运行
+      #     # 只要你在本地终端输入 `exit` 退出登录，或者关闭本地终端，
+      #     # 虚拟机的临时 SSH 连接就会断开，此循环就会立刻结束，绝对不浪费 1 分钟额度！
+      #     while pgrep -x "sshd" > /dev/null; do
+      #       sleep 5
+      #     done
+      #     echo "检测到 SSH 客户端已断开，正在自动关闭虚拟机以节省 Actions 额度..."
 
 
       - name: Download package
