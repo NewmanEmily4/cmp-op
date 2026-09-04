@@ -269,7 +269,19 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ../review/logs
-          make -j"$MAKE_JOBS" V=s 2>&1 | tee ../review/logs/make-build.log
+          log_file=../review/logs/make-build.log
+          echo "Building with $MAKE_JOBS parallel make jobs; full output is saved to $log_file."
+          set +e
+          make -j"$MAKE_JOBS" V=s >"$log_file" 2>&1
+          build_status=$?
+          set -e
+
+          if [[ "$build_status" -ne 0 ]]; then
+            echo 'Build failed. Last 200 log lines:' >&2
+            tail -n 200 "$log_file" >&2
+          fi
+
+          exit "$build_status"
 
       - name: Upload build outputs and logs
         if: ${{ always() }}
