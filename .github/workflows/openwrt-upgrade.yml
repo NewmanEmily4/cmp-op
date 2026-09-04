@@ -28,11 +28,16 @@ on:
         options:
           - "yes"
           - "no"
-      make_jobs:
-        description: Number of parallel make jobs
+      single_thread_build:
+        description: Build firmware with a single make job
         required: true
-        default: "4"
-        type: string
+        default: false
+        type: boolean
+      debug_ssh:
+        description: Open an SSH session before firmware compilation
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -111,7 +116,7 @@ jobs:
           } > ../review/config-report.txt
 
       - name: Upload configuration for manual review
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: openwrt-config-review-${{ github.run_id }}
           path: review/
@@ -137,6 +142,42 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     steps:
+      - name: Check Server Performance
+        shell: bash
+        run: |
+          echo "警告⚠"
+          echo "分配的服务器性能有限，若选择的插件过多，务必注意CPU性能！"
+          echo -e "已知CPU型号（降序）：7763，8370C，8272CL，8171M，E5-2673 \n"
+          echo "--------------------------CPU信息--------------------------"
+          echo "CPU物理数量：$(cat /proc/cpuinfo | grep "physical id" | sort | uniq | wc -l)"
+          echo -e "CPU核心信息：$(cat /proc/cpuinfo | grep name | cut -f2 -d: | uniq -c) \n"
+          echo "--------------------------内存信息--------------------------"
+          echo "已安装内存详细信息："
+          echo -e "$(sudo lshw -short -C memory | grep GiB) \n"
+          echo "--------------------------硬盘信息--------------------------"
+          echo "硬盘数量：$(ls /dev/sd* | grep -v [1-9] | wc -l)" && df -hT
+
+      - name: Optimize Disk Space
+        uses: hugoalh/disk-space-optimizer-ghaction@main
+        with:
+          operate_sudo: "True"
+          general_include: ".+"
+          general_exclude: |-
+            ^GCC$
+            ^G\+\+$
+            Clang
+            LLVM
+          docker_include: ".+"
+          docker_prune: "True"
+          docker_clean: "True"
+          apt_prune: "True"
+          apt_clean: "True"
+          homebrew_prune: "True"
+          homebrew_clean: "True"
+          npm_prune: "True"
+          npm_clean: "True"
+          os_swap: "True"
+
       - name: Install OpenWrt host dependencies
         shell: bash
         run: |
@@ -145,13 +186,30 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             build-essential ca-certificates file flex gawk gettext git libncurses-dev \
             libncursesw5-dev libssl-dev python3 python3-setuptools rsync subversion \
-            unzip wget zlib1g-dev
+            tmate unzip wget zlib1g-dev
 
       - name: Download reviewed configuration
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: openwrt-config-review-${{ github.run_id }}
           path: review
+
+      - name: Determine parallel make jobs
+        shell: bash
+        env:
+          SINGLE_THREAD_BUILD: ${{ inputs.single_thread_build }}
+        run: |
+          set -euo pipefail
+          if [[ "$SINGLE_THREAD_BUILD" == 'true' ]]; then
+            make_jobs=1
+          elif [[ "$SINGLE_THREAD_BUILD" == 'false' ]]; then
+            make_jobs="$(nproc)"
+          else
+            echo 'single_thread_build must be true or false.' >&2
+            exit 1
+          fi
+          printf 'MAKE_JOBS=%s\n' "$make_jobs" >> "$GITHUB_ENV"
+          echo "Using $make_jobs parallel make jobs."
 
       - name: Clone target source and apply configuration
         shell: bash
@@ -172,20 +230,43 @@ jobs:
       - name: Download package sources
         if: ${{ inputs.run_download == 'yes' }}
         working-directory: openwrt
-        shell: bash
-        env:
-          MAKE_JOBS: ${{ inputs.make_jobs }}
         run: |
           set -euo pipefail
           mkdir -p ../review/logs
-          make download -j"$MAKE_JOBS" 2>&1 | tee ../review/logs/make-download.log
+          make download -j"$(nproc)" 2>&1 | tee ../review/logs/make-download.log
+
+      - name: Open SSH debug session before firmware build
+        if: ${{ inputs.debug_ssh && inputs.run_build == 'yes' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          socket=/tmp/cmp-op-tmate.sock
+          continue_file=/continue
+
+          cleanup() {
+            tmate -S "$socket" kill-session >/dev/null 2>&1 || true
+            sudo rm -f "$continue_file" "$socket"
+          }
+          trap cleanup EXIT
+
+          sudo touch "$continue_file"
+          sudo chmod 666 "$continue_file"
+          before=$(stat -c '%y' "$continue_file")
+          tmate -S "$socket" new-session -d
+          tmate -S "$socket" wait tmate-ready
+
+          echo "SSH: $(tmate -S "$socket" display -p '#{tmate_ssh}')"
+          echo "Web: $(tmate -S "$socket" display -p '#{tmate_web}')"
+          echo 'SSH into the runner, inspect the build environment, then run: touch /continue'
+
+          while [[ "$(stat -c '%y' "$continue_file")" == "$before" ]]; do
+            sleep 5
+          done
+          echo 'Continue signal received; starting firmware build.'
 
       - name: Build firmware
         if: ${{ inputs.run_build == 'yes' }}
         working-directory: openwrt
-        shell: bash
-        env:
-          MAKE_JOBS: ${{ inputs.make_jobs }}
         run: |
           set -euo pipefail
           mkdir -p ../review/logs
@@ -193,7 +274,7 @@ jobs:
 
       - name: Upload build outputs and logs
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: openwrt-build-${{ github.run_id }}
           path: |

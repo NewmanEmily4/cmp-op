@@ -1,0 +1,57 @@
+name: Test SSH debug session
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  debug-ssh:
+    name: Test runner SSH connection
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Install tmate
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tmate
+
+      - name: Open SSH session and wait for continue signal
+        shell: bash
+        run: |
+          set -euo pipefail
+          socket=/tmp/test-debug-tmate.sock
+          continue_file=/continue
+
+          cleanup() {
+            tmate -S "$socket" kill-session >/dev/null 2>&1 || true
+            sudo rm -f "$continue_file" "$socket"
+          }
+          trap cleanup EXIT
+
+          sudo touch "$continue_file"
+          sudo chmod 666 "$continue_file"
+          before=$(stat -c '%y' "$continue_file")
+
+          tmate -S "$socket" new-session -d
+          tmate -S "$socket" wait tmate-ready
+
+          echo "SSH: $(tmate -S "$socket" display -p '#{tmate_ssh}')"
+          echo "Web: $(tmate -S "$socket" display -p '#{tmate_web}')"
+          echo '连接 runner 后可执行检查命令；确认无误后执行：touch /continue'
+
+          while [[ "$(stat -c '%y' "$continue_file")" == "$before" ]]; do
+            sleep 5
+          done
+          echo 'Continue signal received.'
+
+      - name: Verify session released the runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Runner: $(uname -a)"
+          echo "CPU cores: $(nproc)"
+          echo 'SSH debug session test passed.'
