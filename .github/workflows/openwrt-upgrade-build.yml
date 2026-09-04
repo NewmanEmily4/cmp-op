@@ -23,7 +23,7 @@ on:
       run_build:
         description: Build the firmware after configuration
         required: true
-        default: "no"
+        default: "yes"
         type: choice
         options:
           - "yes"
@@ -36,7 +36,7 @@ on:
       debug_ssh:
         description: Open an SSH session before firmware compilation
         required: true
-        default: false
+        default: true
         type: boolean
 
 permissions:
