@@ -19,6 +19,7 @@ jobs:
           wait-timeout-minutes: 30
 
       - name: Verify session released the runner
+        if: ${{ always() && !cancelled() }}
         shell: bash
         run: |
           set -euo pipefail
