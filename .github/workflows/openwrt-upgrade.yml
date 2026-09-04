@@ -218,6 +218,12 @@ jobs:
           TARGET_TAG: ${{ needs.prepare.outputs.target_tag }}
         run: |
           set -euo pipefail
+
+          sudo sed -i "1i alias next='touch /tmp/continue'" /etc/profile
+          sudo sed -i "1i alias ll='ls -alF --color=auto'" /etc/profile
+          sudo sed -i "1i alias grep='grep --color=auto'" /etc/profile
+          sudo bash -c 'cat ~/.bashrc >> /etc/profile'
+          
           git clone --depth 1 --no-tags --branch "$TARGET_TAG" \
             https://github.com/openwrt/openwrt.git openwrt
           cd openwrt
@@ -241,7 +247,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -f "$GITHUB_WORKSPACE/continue"
+          rm -f "/tmp/continue"
 
       - name: Open SSH debug session
         if: ${{ inputs.debug_ssh && inputs.run_build == 'yes' }}
@@ -257,8 +263,8 @@ jobs:
         run: |
           set -euo pipefail
           echo 'SSH session is active. Run this command after debugging:'
-          echo '  cd "$GITHUB_WORKSPACE" && touch continue'
-          while [[ ! -f "$GITHUB_WORKSPACE/continue" ]]; do
+          echo '  touch /tmp/continue'
+          while [[ ! -f /tmp/continue" ]]; do
             sleep 5
           done
           echo 'Continue signal received; starting firmware build.'
