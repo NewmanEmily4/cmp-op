@@ -14,13 +14,12 @@ jobs:
     steps:
       - name: Open Upterm SSH session
         uses: owenthereal/action-upterm@v1
-        continue-on-error: true
         with:
           limit-access-to-actor: true
           wait-timeout-minutes: 30
 
       - name: Verify session released the runner
-        if: always()
+        if: ${{ always() }}
         shell: bash
         run: |
           set -euo pipefail
