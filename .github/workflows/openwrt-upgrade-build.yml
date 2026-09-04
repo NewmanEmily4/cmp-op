@@ -242,6 +242,7 @@ jobs:
           path: |
             openwrt/bin/targets/
             openwrt/bin/packages/
+            openwrt/.config
             logs/
           if-no-files-found: warn
           retention-days: 14
