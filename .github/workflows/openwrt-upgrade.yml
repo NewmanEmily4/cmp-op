@@ -33,11 +33,7 @@ on:
         required: true
         default: false
         type: boolean
-      debug_ssh:
-        description: Open an SSH session before firmware compilation
-        required: true
-        default: false
-        type: boolean
+
 
 permissions:
   contents: read
@@ -234,35 +230,6 @@ jobs:
           set -euo pipefail
           mkdir -p ../review/logs
           make download -j"$(nproc)" 2>&1 | tee ../review/logs/make-download.log
-
-      - name: Open SSH debug session before firmware build
-        if: ${{ inputs.debug_ssh && inputs.run_build == 'yes' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          socket=/tmp/cmp-op-tmate.sock
-          continue_file=/continue
-
-          cleanup() {
-            tmate -S "$socket" kill-session >/dev/null 2>&1 || true
-            sudo rm -f "$continue_file" "$socket"
-          }
-          trap cleanup EXIT
-
-          sudo touch "$continue_file"
-          sudo chmod 666 "$continue_file"
-          before=$(stat -c '%y' "$continue_file")
-          tmate -S "$socket" new-session -d
-          tmate -S "$socket" wait tmate-ready
-
-          echo "SSH: $(tmate -S "$socket" display -p '#{tmate_ssh}')"
-          echo "Web: $(tmate -S "$socket" display -p '#{tmate_web}')"
-          echo 'SSH into the runner, inspect the build environment, then run: touch /continue'
-
-          while [[ "$(stat -c '%y' "$continue_file")" == "$before" ]]; do
-            sleep 5
-          done
-          echo 'Continue signal received; starting firmware build.'
 
       - name: Build firmware
         if: ${{ inputs.run_build == 'yes' }}
