@@ -120,26 +120,6 @@ jobs:
           echo "TARGET_TAG=$target_tag" >> "$GITHUB_ENV"
           echo "Using target source: $target_tag"
 
-      - name: Migrate configuration
-        shell: bash
-        run: |
-          set -euo pipefail
-          git clone --depth 1 --no-tags --branch "$TARGET_TAG" \
-            https://github.com/openwrt/openwrt.git openwrt-prepare
-          cd openwrt-prepare
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-          cp ../old.config .config
-          make defconfig
-          ./scripts/diffconfig.sh > ../migrated.config
-          cd ..
-          rm -rf openwrt-prepare
-
-          if [[ ! -s migrated.config ]]; then
-            echo 'The migrated configuration is empty; refusing to continue.' >&2
-            exit 1
-          fi
-
       - name: Clone target source and apply configuration
         shell: bash
         run: |
@@ -149,9 +129,38 @@ jobs:
           cd openwrt
           ./scripts/feeds update -a
           ./scripts/feeds install -a
+          cp ../old.config .config
           make defconfig
-          cat ../migrated.config >> .config
-          make defconfig
+
+      - name: Generate configuration diff document
+        working-directory: openwrt
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ../logs
+          old_normalized="$(mktemp)"
+          new_normalized="$(mktemp)"
+          trap 'rm -f "$old_normalized" "$new_normalized"' EXIT
+
+          grep -E '^(CONFIG_[A-Za-z0-9_]+=|# CONFIG_[A-Za-z0-9_]+ is not set)' \
+            ../old.config | sort > "$old_normalized" || true
+          grep -E '^(CONFIG_[A-Za-z0-9_]+=|# CONFIG_[A-Za-z0-9_]+ is not set)' \
+            .config | sort > "$new_normalized" || true
+
+          if diff -u --label old.config --label openwrt/.config \
+            "$old_normalized" "$new_normalized" > ../logs/config-diff.patch; then
+            printf '%s\n' '# Configuration differences' '' \
+              'No configuration differences were found after normalization.' \
+              > ../logs/config-diff.md
+          else
+            {
+              printf '%s\n' '# Configuration differences' '' \
+                'The following configuration options differ between the old and new configs.' '' \
+                '```diff'
+              cat ../logs/config-diff.patch
+              printf '%s\n' '```'
+            } > ../logs/config-diff.md
+          fi
 
       - name: Determine parallel make jobs
         shell: bash
