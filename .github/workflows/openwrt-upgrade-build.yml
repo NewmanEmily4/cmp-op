@@ -259,5 +259,6 @@ jobs:
             openwrt/bin/packages/
             openwrt/.config
             logs/
+          include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14
