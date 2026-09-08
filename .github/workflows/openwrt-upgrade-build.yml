@@ -42,9 +42,9 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: openwrt-${{ github.ref }}
-  cancel-in-progress: false
+# concurrency:
+#   group: openwrt-${{ github.ref }}
+#   cancel-in-progress: false
 
 jobs:
   build:
