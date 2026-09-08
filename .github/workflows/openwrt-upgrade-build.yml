@@ -1,4 +1,4 @@
-name: OpenWrt upgrade and build (no review)
+name: OpenWrt upgrade and build
 
 on:
   workflow_dispatch:
@@ -262,3 +262,12 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14
+
+      - name: Stop SSH debug session
+        if: ${{ always() && inputs.debug_ssh && inputs.run_build == 'yes' }}
+        shell: bash
+        run: |
+          set +e
+          pkill -TERM -x upterm
+          pkill -TERM -x tmux
+          true
