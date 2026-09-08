@@ -34,7 +34,7 @@ on:
         default: false
         type: boolean
       debug_ssh:
-        description: Open an SSH session before firmware compilation
+        description: Open an SSH session before post-build packaging
         required: true
         default: true
         type: boolean
@@ -96,7 +96,7 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             build-essential ca-certificates file flex gawk gettext git libncurses-dev \
             libncursesw5-dev libssl-dev python3 python3-setuptools rsync subversion \
-            unzip wget zlib1g-dev nload jq
+            unzip wget zlib1g-dev nload jq zip
 
       - name: Determine target source
         id: target
@@ -204,14 +204,52 @@ jobs:
           exit "$download_status"
 
       - name: Remove stale SSH continue signal
-        if: ${{ inputs.debug_ssh && inputs.run_build == 'yes' }}
+        if: ${{ inputs.debug_ssh }}
         shell: bash
         run: |
           set -euo pipefail
           rm -f "/tmp/continue"
 
+      - name: Configure SSH debug tips
+        if: ${{ inputs.debug_ssh }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo tee /etc/profile.d/openwrt-debug-tips.sh >/dev/null <<'EOF'
+          if [[ -t 1 ]]; then
+            cyan=$'\033[1;36m'
+            green=$'\033[1;32m'
+            yellow=$'\033[1;33m'
+            dim=$'\033[2m'
+            reset=$'\033[0m'
+          else
+            cyan=''
+            green=''
+            yellow=''
+            dim=''
+            reset=''
+          fi
+
+          printf '\n%s+------------------------------------------------------------+%s\n' "$cyan" "$reset"
+          printf '%s|%s                  %sOpenWrt debug session%s                 %s|%s\n' \
+            "$cyan" "$reset" "$cyan" "$reset" "$cyan" "$reset"
+          printf '%s+------------------------------------------------------------+%s\n' "$cyan" "$reset"
+          printf '%s  Commands:%s\n' "$yellow" "$reset"
+          printf '  %scd "$GITHUB_WORKSPACE/openwrt"%s                 Enter source directory\n' "$green" "$reset"
+          printf '  %stail -f "$GITHUB_WORKSPACE/logs/make-download.log"%s Follow download log\n' "$green" "$reset"
+          printf '  %stail -f "$GITHUB_WORKSPACE/logs/make-build.log"%s    Follow build log\n' "$green" "$reset"
+          printf '  %sls -lah "$GITHUB_WORKSPACE/openwrt/bin/targets"%s  List firmware outputs\n' "$green" "$reset"
+          printf '  %smake menuconfig%s  Open the menuconfig interface\n' "$yellow" "$reset"
+          printf '  %smake oldconfig%s  Update the configuration manually\n' "$yellow" "$reset"
+          printf '\n%s  When finished, run:%s %snext%s\n' "$yellow" "$reset" "$green" "$reset"
+          printf '%s  This will continue the workflow.%s\n' "$dim" "$reset"
+          printf '%s+------------------------------------------------------------+%s\n\n' "$cyan" "$reset"
+          EOF
+          sudo chmod 0644 /etc/profile.d/openwrt-debug-tips.sh
+          sudo bash -n /etc/profile.d/openwrt-debug-tips.sh
+
       - name: Open SSH debug session
-        if: ${{ inputs.debug_ssh && inputs.run_build == 'yes' }}
+        if: ${{ inputs.debug_ssh }}
         uses: owenthereal/action-upterm@v1
         with:
           detached: true
@@ -219,7 +257,7 @@ jobs:
           wait-timeout-minutes: 30
 
       - name: Wait for SSH continue signal
-        if: ${{ inputs.debug_ssh && inputs.run_build == 'yes' }}
+        if: ${{ inputs.debug_ssh }}
         shell: bash
         run: |
           set -euo pipefail
@@ -253,36 +291,59 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: openwrt-build-${{ github.run_id }}
+          name: openwrt-build-log-${{ github.run_id }}
           path: |
-            openwrt/bin/targets/
-            openwrt/bin/packages/
-            openwrt/.config
             logs/
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Package build outputs and logs for release
+      - name: Package build outputs for release
         id: package_release_archive
         if: ${{ always() }}
         shell: bash
         run: |
           set -euo pipefail
-          archive_root="$RUNNER_TEMP/openwrt-build-release"
-          archive_path="$RUNNER_TEMP/openwrt-build-${GITHUB_RUN_ID}.tar.gz"
-          rm -rf "$archive_root"
-          mkdir -p "$archive_root"
+          config_file=openwrt/.config
+          device_line="$(grep -m 1 -E '^CONFIG_TARGET[^=]*_DEVICE_[^=]+=y$' "$config_file" || true)"
+          if [[ -z "$device_line" ]]; then
+            echo 'Could not determine the selected target device from openwrt/.config.' >&2
+            exit 1
+          fi
 
-          for path in openwrt/bin/targets openwrt/bin/packages openwrt/.config logs; do
-            if [[ -e "$path" ]]; then
-              mkdir -p "$archive_root/$(dirname "$path")"
-              cp -a "$path" "$archive_root/$path"
-            fi
-          done
+          device_name="${device_line%%=y}"
+          IFS=_ read -r -a device_fields <<< "$device_name"
+          if (( ${#device_fields[@]} < 4 )); then
+            echo "Unexpected target device configuration: $device_line" >&2
+            exit 1
+          fi
 
-          tar -czf "$archive_path" -C "$archive_root" .
+          chip="${device_fields[2]}"
+          model="${device_fields[3]}"
+          target="${device_name#*_DEVICE_}"
+          ver="$(awk -F= '/^DESTVER=/{print $2; exit}' old.config | tr -d '\r')"
+          if [[ -z "$ver" ]]; then
+            ver="${TARGET_TAG#v}"
+          fi
+          if [[ -z "$ver" ]]; then
+            echo 'Could not determine the OpenWrt version for the archive name.' >&2
+            exit 1
+          fi
+
+          config_name="${target}.config"
+          mkdir -p openwrt/bin/targets openwrt/bin/packages
+          cp "$config_file" "openwrt/bin/$config_name"
+
+          archive_name="openwrt-${chip}-${model}-${target}-v${ver}.zip"
+          archive_path="$RUNNER_TEMP/$archive_name"
+          rm -f "$archive_path"
+          (
+            cd openwrt
+            zip -r "$archive_path" bin/targets bin/packages "bin/$config_name"
+          )
           echo "RELEASE_ARCHIVE=$archive_path" >> "$GITHUB_ENV"
+          echo "archive_path=$archive_path" >> "$GITHUB_OUTPUT"
+          echo "Archive: $archive_name"
 
       - name: Upload build archive to GoFile
         if: ${{ always() && steps.package_release_archive.outcome == 'success' }}
@@ -316,11 +377,11 @@ jobs:
           tag_name: openwrt-build-${{ github.run_id }}
           name: OpenWrt build ${{ github.run_id }}
           target_commitish: ${{ github.sha }}
-          files: ${{ runner.temp }}/openwrt-build-${{ github.run_id }}.tar.gz
+          files: ${{ steps.package_release_archive.outputs.archive_path }}
           fail_on_unmatched_files: true
 
       - name: Stop SSH debug session
-        if: ${{ always() && inputs.debug_ssh && inputs.run_build == 'yes' }}
+        if: ${{ always() && inputs.debug_ssh }}
         shell: bash
         run: |
           set +e
