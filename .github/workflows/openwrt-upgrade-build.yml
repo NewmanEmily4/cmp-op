@@ -34,7 +34,7 @@ on:
         default: false
         type: boolean
       debug_ssh:
-        description: Open an SSH session before post-build packaging
+        description: Open an SSH session before firmware compilation
         required: true
         default: true
         type: boolean
