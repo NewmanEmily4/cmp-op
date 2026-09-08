@@ -321,6 +321,25 @@ jobs:
           chip="${device_fields[2]}"
           model="${device_fields[3]}"
           target="${device_name#*_DEVICE_}"
+          target_arch="$(awk -F= '/^CONFIG_TARGET_ARCH_PACKAGES=/{gsub(/["\r]/, "", $2); print $2; exit}' "$config_file")"
+          target_arch="${target_arch:-unknown}"
+          if [[ "$target" == 'generic' ]]; then
+            case "$target_arch" in
+              x86_64)
+                target='x64'
+                ;;
+              x86*)
+                target='x86'
+                ;;
+              *)
+                echo "Keeping generic target for non-x86 architecture: ${target_arch:-unknown}"
+                ;;
+            esac
+          fi
+          if [[ "$target" == 'generic' && "$target_arch" == 'unknown' ]]; then
+            echo 'Could not determine the target architecture from openwrt/.config.' >&2
+            exit 1
+          fi
           ver="$(awk -F= '/^DESTVER=/{print $2; exit}' old.config | tr -d '\r')"
           if [[ -z "$ver" ]]; then
             ver="${TARGET_TAG#v}"
