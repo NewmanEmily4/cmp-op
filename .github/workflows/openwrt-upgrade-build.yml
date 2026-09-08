@@ -40,7 +40,7 @@ on:
         type: boolean
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: openwrt-${{ github.ref }}
@@ -96,7 +96,7 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             build-essential ca-certificates file flex gawk gettext git libncurses-dev \
             libncursesw5-dev libssl-dev python3 python3-setuptools rsync subversion \
-            unzip wget zlib1g-dev nload
+            unzip wget zlib1g-dev nload jq
 
       - name: Determine target source
         id: target
@@ -262,6 +262,62 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14
+
+      - name: Package build outputs and logs for release
+        id: package_release_archive
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive_root="$RUNNER_TEMP/openwrt-build-release"
+          archive_path="$RUNNER_TEMP/openwrt-build-${GITHUB_RUN_ID}.tar.gz"
+          rm -rf "$archive_root"
+          mkdir -p "$archive_root"
+
+          for path in openwrt/bin/targets openwrt/bin/packages openwrt/.config logs; do
+            if [[ -e "$path" ]]; then
+              mkdir -p "$archive_root/$(dirname "$path")"
+              cp -a "$path" "$archive_root/$path"
+            fi
+          done
+
+          tar -czf "$archive_path" -C "$archive_root" .
+          echo "RELEASE_ARCHIVE=$archive_path" >> "$GITHUB_ENV"
+
+      - name: Upload build archive to GoFile
+        if: ${{ always() && steps.package_release_archive.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          download_url="$(curl --fail-with-body --retry 3 --retry-connrefused --retry-delay 3 \
+            -F "file=@${RELEASE_ARCHIVE}" \
+            https://upload.gofile.io/uploadfile | \
+            jq -er '
+              if .status != "ok" then
+                error("GoFile upload failed: " + (.status // "unknown"))
+              elif (.data.downloadPage | type) != "string" then
+                error("GoFile response did not contain data.downloadPage")
+              else
+                .data.downloadPage
+              end
+            ')"
+
+          echo "GoFile download link: $download_url"
+          {
+            echo '### GoFile upload'
+            echo
+            echo "Download link: $download_url"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload build outputs and logs to GitHub Release
+        if: ${{ always() && steps.package_release_archive.outcome == 'success' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: openwrt-build-${{ github.run_id }}
+          name: OpenWrt build ${{ github.run_id }}
+          target_commitish: ${{ github.sha }}
+          files: ${{ runner.temp }}/openwrt-build-${{ github.run_id }}.tar.gz
+          fail_on_unmatched_files: true
 
       - name: Stop SSH debug session
         if: ${{ always() && inputs.debug_ssh && inputs.run_build == 'yes' }}
