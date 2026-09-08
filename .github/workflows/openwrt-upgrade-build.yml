@@ -391,7 +391,7 @@ jobs:
 
       - name: Upload build outputs and logs to GitHub Release
         if: ${{ always() && steps.package_release_archive.outcome == 'success' }}
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3.0.3
         with:
           tag_name: openwrt-build-${{ github.run_id }}
           name: OpenWrt build ${{ github.run_id }}
