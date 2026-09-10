@@ -269,6 +269,7 @@ jobs:
           echo 'Continue signal received; starting firmware build.'
 
       - name: Build firmware
+        id: build_firmware
         if: ${{ inputs.run_build == 'yes' }}
         working-directory: openwrt
         shell: bash
@@ -388,6 +389,62 @@ jobs:
             echo
             echo "Download link: $download_url"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Package SDK for release
+        id: package_sdk_archive
+        if: ${{ always() && inputs.run_build == 'yes' && steps.build_firmware.outcome == 'success' && steps.package_release_archive.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t sdk_files < <(find openwrt/bin/targets -type f -name '*-sdk-*' \( \
+            -name '*.tar' -o -name '*.tar.gz' -o -name '*.tar.bz2' -o -name '*.tar.xz' \
+            -o -name '*.tar.zst' \) -print | sort)
+          if (( ${#sdk_files[@]} == 0 )); then
+            echo 'No SDK archive was generated under openwrt/bin/targets.' >&2
+            exit 1
+          fi
+
+          sdk_archive="${RELEASE_ARCHIVE%.zip}-sdk.zip"
+          rm -f "$sdk_archive"
+          zip -j "$sdk_archive" "${sdk_files[@]}"
+          echo "SDK_ARCHIVE=$sdk_archive" >> "$GITHUB_ENV"
+          echo "archive_path=$sdk_archive" >> "$GITHUB_OUTPUT"
+          printf 'SDK archive: %s\n' "$sdk_archive"
+
+      - name: Upload SDK archive to GoFile
+        if: ${{ always() && steps.package_sdk_archive.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          download_url="$(curl --fail-with-body --retry 3 --retry-connrefused --retry-delay 3 \
+            -F "file=@${SDK_ARCHIVE}" \
+            https://upload.gofile.io/uploadfile | \
+            jq -er '
+              if .status != "ok" then
+                error("GoFile SDK upload failed: " + (.status // "unknown"))
+              elif (.data.downloadPage | type) != "string" then
+                error("GoFile response did not contain data.downloadPage")
+              else
+                .data.downloadPage
+              end
+            ')"
+
+          echo "GoFile SDK download link: $download_url"
+          {
+            echo '### GoFile SDK upload'
+            echo
+            echo "Download link: $download_url"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload SDK archive to GitHub Release
+        if: ${{ always() && steps.package_sdk_archive.outcome == 'success' }}
+        uses: softprops/action-gh-release@v3.0.3
+        with:
+          tag_name: openwrt-build-${{ github.run_id }}
+          name: OpenWrt build ${{ github.run_id }}
+          target_commitish: ${{ github.sha }}
+          files: ${{ steps.package_sdk_archive.outputs.archive_path }}
+          fail_on_unmatched_files: true
 
       - name: Upload build outputs and logs to GitHub Release
         if: ${{ always() && steps.package_release_archive.outcome == 'success' }}
