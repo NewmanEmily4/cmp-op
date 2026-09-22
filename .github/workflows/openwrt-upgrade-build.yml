@@ -252,6 +252,7 @@ jobs:
         if: ${{ inputs.debug_ssh }}
         uses: owenthereal/action-upterm@v1
         with:
+          upterm-version: v0.29.0
           detached: true
           limit-access-to-actor: true
           wait-timeout-minutes: 30
