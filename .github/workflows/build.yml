@@ -20,3 +20,19 @@ jobs:
           echo "tag=$latest" >> $GITHUB_OUTPUT
           if [ "$latest" != "$last" ]; then echo "new=true" >> $GITHUB_OUTPUT; else echo "new=false" >> $GITHUB_OUTPUT; fi
           echo "latest=$latest last=$last new=$(grep '^new=' $GITHUB_OUTPUT | cut -d= -f2)" | tee -a $GITHUB_STEP_SUMMARY
+
+  record:
+    needs: [check]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Commit last version
+        run: |
+          echo "${{ needs.check.outputs.tag }}" > .last_version
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .last_version
+          git commit -m "chore: built ${{ needs.check.outputs.tag }}"
+          git push
